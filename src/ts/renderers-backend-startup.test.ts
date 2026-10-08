@@ -2,6 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'b
 import { PgsRenderer } from './renderers'
 import { WebGPURenderer } from './webgpu-renderer'
 import { WebGL2Renderer } from './webgl2-renderer'
+import * as webgpu from './webgpu-renderer'
+import * as webgl2 from './webgl2-renderer'
+import * as worker from './worker'
 import { initWasm } from './wasm'
 import type { SubtitleData } from './types'
 
@@ -158,6 +161,83 @@ function backendMocks(kind: 'webgpu' | 'webgl2', gate: ReturnType<typeof deferre
 }
 afterAll(() => Object.assign(globalThis, saved))
 describe('graphics backend startup', () => {
+  for (const kind of ['webgpu', 'webgl2'] as const)
+    test(`${kind} constructor failure falls back and redraws the paused cue`, async () => {
+      const { renderer } = create('canvas2d')
+      await settle()
+      canvasDraws = 0
+      const gate = deferred()
+      gate.resolve()
+      if (kind === 'webgpu') backendMocks('webgl2', gate)
+      const module = kind === 'webgpu' ? webgpu : webgl2
+      const name = kind === 'webgpu' ? 'WebGPURenderer' : 'WebGL2Renderer'
+      mocks.push(
+        spyOn(module as any, name).mockImplementation(function () {
+          throw new Error('constructor failed')
+        })
+      )
+      await (renderer as any)[kind === 'webgpu' ? 'initWebGPU' : 'initWebGL2']()
+      await settle()
+      expect((renderer as any).currentRendererBackend).toBe(kind === 'webgpu' ? 'webgl2' : 'canvas2d')
+      expect(kind === 'webgpu' ? draws : [canvasDraws]).toEqual(kind === 'webgpu' ? [0] : [1])
+    })
+
+  for (const [paused, time] of [
+    [true, 0],
+    [true, 1],
+    [true, 2],
+    [false, 0]
+  ] as const)
+    test(`worker attachment reconciles ${paused ? 'paused' : 'playing'} presentation at ${time}`, async () => {
+      const { renderer, video: v } = create('canvas2d', paused)
+      await settle()
+      if (!paused) renderer.tick()
+      expect(renderer.getStats().currentIndex).toBe(0)
+      const token = (renderer as any).getPresentationToken()
+      const state = (renderer as any).getWorkerRendererState()
+      Object.assign(state, { useWorker: true, workerReady: true, sessionId: 'startup' })
+      ;(renderer as any).pendingWorkerOffscreen = true
+      ;(renderer as any).canvas.transferControlToOffscreen = () => ({})
+      const attach = deferred()
+      const resize = deferred()
+      const presented: number[] = []
+      mocks.push(
+        spyOn(worker, 'sendToWorker').mockImplementation(async (request) => {
+          if (request.type === 'attachOffscreenCanvas') {
+            await attach.promise
+            return { type: 'offscreenAttached', sessionId: 'startup' }
+          }
+          if (request.type === 'resizeOffscreenCanvas') await resize.promise
+          if (request.type === 'presentOffscreen') {
+            presented.push(request.index)
+            return {
+              type: 'offscreenPresented',
+              sessionId: 'startup',
+              status: request.index < 0 ? 'cleared' : 'rendered',
+              width: 2,
+              height: 2,
+              compositionCount: request.index < 0 ? 0 : 1
+            }
+          }
+          return { type: 'offscreenDetached', sessionId: 'startup' }
+        })
+      )
+      const ready = (renderer as any).ensureWorkerOffscreenAttached()
+      v.currentTime = time
+      attach.resolve()
+      await settle()
+      expect(presented).toEqual([])
+      resize.resolve()
+      await ready
+      expect((renderer as any).getPresentationToken()).toBeGreaterThan(token)
+      if (!paused) {
+        expect(presented).toEqual([])
+        renderer.tick()
+      }
+      await settle()
+      expect(presented).toEqual([time < 2 ? time : -1])
+    })
+
   test('automatic WebGPU failure starts WebGL2 and redraws only when it becomes ready', async () => {
     const gpu = deferred()
     const gl = deferred()

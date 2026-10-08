@@ -653,8 +653,6 @@ abstract class BaseVideoSubtitleRenderer {
 
       this.useWorkerOffscreen = true
       this.emitRendererBackend('worker-offscreen')
-      this.lastRenderedIndex = -1
-      this.lastRenderedTime = -1
 
       await sendToWorker({
         type: 'resizeOffscreenCanvas',
@@ -678,6 +676,7 @@ abstract class BaseVideoSubtitleRenderer {
         )
       )
     }
+    if (this.useWorkerOffscreen) this.reconcileBackendPresentation()
   }
 
   private recreateCanvasForMainThreadFallback(): void {
@@ -780,9 +779,10 @@ abstract class BaseVideoSubtitleRenderer {
   /** Initialize WebGPU renderer. */
   private async initWebGPU(allowBackendFallback = true): Promise<void> {
     if (this.disposed) return
-    const renderer = new WebGPURenderer()
-    this.webgpuRenderer = renderer
+    let renderer: WebGPURenderer | null = null
     try {
+      renderer = new WebGPURenderer()
+      this.webgpuRenderer = renderer
       await renderer.init()
 
       if (this.disposed || !this.canvas) {
@@ -801,7 +801,7 @@ abstract class BaseVideoSubtitleRenderer {
         return
       }
     } catch (error) {
-      renderer.destroy()
+      renderer?.destroy()
       if (this.disposed) return
       this.webgpuRenderer = null
       this.useWebGPU = false
@@ -822,9 +822,10 @@ abstract class BaseVideoSubtitleRenderer {
   /** Initialize WebGL2 renderer. */
   private async initWebGL2(allowBackendFallback = true): Promise<void> {
     if (this.disposed) return
-    const renderer = new WebGL2Renderer()
-    this.webgl2Renderer = renderer
+    let renderer: WebGL2Renderer | null = null
     try {
+      renderer = new WebGL2Renderer()
+      this.webgl2Renderer = renderer
       await renderer.init()
 
       if (this.disposed || !this.canvas) {
@@ -843,7 +844,7 @@ abstract class BaseVideoSubtitleRenderer {
         return
       }
     } catch (error) {
-      renderer.destroy()
+      renderer?.destroy()
       if (this.disposed) return
       this.webgl2Renderer = null
       this.useWebGL2 = false
