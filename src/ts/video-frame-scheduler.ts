@@ -75,6 +75,9 @@ export class VideoFrameScheduler {
 
   start(): void {
     this.stop()
+    // Fallback is deliberate and permanent for this scheduler's lifetime,
+    // including restarts. Re-probing a stalled native-HLS callback source
+    // would repeatedly freeze subtitles for the watchdog grace period.
     const generation = this.generation
     this.resetWatchdogEvidence()
     this.schedule(generation)
